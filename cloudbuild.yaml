@@ -1,0 +1,47 @@
+steps:
+- name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
+  entrypoint: 'bash'
+  args: ['-c', 'npm install']
+
+- name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
+  args:
+  - functions
+  - deploy
+  - createcontact
+  - --gen2
+  - --runtime=nodejs20
+  - --region=us-central1
+  - --source=.
+  - --entry-point=createContact
+  - --trigger-http
+  - --allow-unauthenticated
+  - --service-account=338389082587-compute@developer.gserviceaccount.com
+  - --set-secrets=MAIL_USER=MAIL_USER:latest,MAIL_PASS=MAIL_PASS:latest
+
+- name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
+  args:
+  - functions
+  - deploy
+  - updatecontactnotes
+  - --gen2
+  - --runtime=nodejs20
+  - --region=us-central1
+  - --source=.
+  - --entry-point=updateContactNotes
+  - --trigger-http
+  - --allow-unauthenticated
+  - --service-account=338389082587-compute@developer.gserviceaccount.com
+
+- name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
+  args:
+  - functions
+  - deploy
+  - processFollowUp
+  - --gen2
+  - --runtime=nodejs20
+  - --region=us-central1
+  - --source=.
+  - --entry-point=processFollowUp
+  - --service-account=338389082587-compute@developer.gserviceaccount.com
+
+timeout: '1600s'
