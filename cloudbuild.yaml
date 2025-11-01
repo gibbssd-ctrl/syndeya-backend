@@ -1,6 +1,6 @@
 steps:
-
 - name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
+  entrypoint: 'gcloud'
   args:
   - functions
   - deploy
@@ -16,6 +16,7 @@ steps:
   - --set-secrets=MAIL_USER=MAIL_USER:latest,MAIL_PASS=MAIL_PASS:latest
 
 - name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
+  entrypoint: 'gcloud'
   args:
   - functions
   - deploy
@@ -30,6 +31,7 @@ steps:
   - --service-account=338389082587-compute@developer.gserviceaccount.com
 
 - name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
+  entrypoint: 'gcloud'
   args:
   - functions
   - deploy
@@ -42,5 +44,6 @@ steps:
   - --service-account=338389082587-compute@developer.gserviceaccount.com
 
 timeout: '1600s'
+
 options:
   logging: CLOUD_LOGGING_ONLY
