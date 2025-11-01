@@ -45,3 +45,5 @@ steps:
   - --service-account=338389082587-compute@developer.gserviceaccount.com
 
 timeout: '1600s'
+options:
+  logging: CLOUD_LOGGING_ONLY
