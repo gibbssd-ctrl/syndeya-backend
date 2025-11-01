@@ -1,3 +1,4 @@
+// CI/CD Test - 2025-11-01
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer'); 
