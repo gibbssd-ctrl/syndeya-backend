@@ -1,7 +1,4 @@
 steps:
-- name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
-  entrypoint: 'bash'
-  args: ['-c', 'npm install']
 
 - name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli'
   args:
