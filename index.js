@@ -1,18 +1,15 @@
-// CI/CD Test - 2025-11-01
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer'); 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onRequest } = require("firebase-functions/v2/https"); // <-- V2 HTTP Import
+const { onRequest } = require("firebase-functions/v2/https");
+const cors = require('cors')({origin: true}); // <-- CORS FIX 1: Import and configure cors
 
-// Initialize the Firebase SDK and Firestore
-// NOTE: Using the confirmed, full project ID for explicit initialization
 admin.initializeApp({
     projectId: 'syndeya-81bf4', 
 });
 const db = admin.firestore();
 
-// --- EMAIL CONFIGURATION ---
 const mailTransport = nodemailer.createTransport({
     service: 'gmail', 
     auth: {
@@ -35,7 +32,6 @@ ${ownerName}
 Syndeya: The Synergy of Digital Connection`,
 };
 
-// Helper function to send the immediate follow-up email
 async function sendThankYou(recipientEmail, contactName, eventName, ownerName) {
     if (!recipientEmail || !process.env.MAIL_USER) {
         console.log("Recipient email or sender config missing. Skipping immediate follow-up.");
@@ -59,101 +55,105 @@ async function sendThankYou(recipientEmail, contactName, eventName, ownerName) {
 
 
 // -------------------------------------------------------------------------
-// FUNCTION 1: createContact (V2 HTTP POST) - Logs new connection and triggers Thank You email
+// FUNCTION 1: createContact (V2 HTTP POST)
 // -------------------------------------------------------------------------
-exports.createContact = onRequest({ region: "us-central1" }, async (req, res) => {
-    if (req.method !== 'POST' || !req.body.recipientEmail || !req.body.cardHolderId || !req.body.ownerName) {
-        return res.status(400).send('Invalid request or missing required fields (email, ownerId, ownerName).');
-    }
+exports.createContact = onRequest({ region: "us-central1" }, (req, res) => {
+    // <-- CORS FIX 2: Wrap the function in the cors handler
+    cors(req, res, async () => {
+        if (req.method !== 'POST' || !req.body.recipientEmail || !req.body.cardHolderId || !req.body.ownerName) {
+            return res.status(400).send('Invalid request or missing required fields (email, ownerId, ownerName).');
+        }
 
-    const { recipientEmail, cardHolderId, ownerName, meetingLocation, targetName } = req.body;
-    
-    const timestampCreated = admin.firestore.Timestamp.now();
-    const contactId = db.collection('contacts').doc().id; 
-    const eventName = meetingLocation || 'a recent event';
-    const contactName = targetName || 'New Contact';
+        const { recipientEmail, cardHolderId, ownerName, meetingLocation, targetName } = req.body;
 
-    const newContact = {
-        contact_id: contactId,
-        owner_id: cardHolderId, 
-        target_name: contactName,
-        target_email: recipientEmail, 
-        meeting_location: eventName,
-        date_met: timestampCreated,
-        notes: null,
-        notes_prompted: false, 
-        follow_up_time: null, 
-        reminder_status: 'PENDING_NOTES', 
-    };
+        const timestampCreated = admin.firestore.Timestamp.now();
+        const contactId = db.collection('contacts').doc().id; 
+        const eventName = meetingLocation || 'a recent event';
+        const contactName = targetName || 'New Contact';
 
-    try {
-        await db.collection('contacts').doc(contactId).set(newContact);
-        sendThankYou(recipientEmail, contactName, eventName, ownerName); 
+        const newContact = {
+            contact_id: contactId,
+            owner_id: cardHolderId, 
+            target_name: contactName,
+            target_email: recipientEmail, 
+            meeting_location: eventName,
+            date_met: timestampCreated,
+            notes: null,
+            notes_prompted: false, 
+            follow_up_time: null, 
+            reminder_status: 'PENDING_NOTES', 
+        };
 
-        return res.status(200).send({ 
-            status: 'Success', 
-            message: 'Contact logged and thank-you email triggered.',
-            contactId: contactId
-        });
+        try {
+            await db.collection('contacts').doc(contactId).set(newContact);
+            sendThankYou(recipientEmail, contactName, eventName, ownerName); 
 
-    } catch (error) {
-        console.error("Error creating contact:", error);
-        return res.status(500).send("Server error during contact creation.");
-    }
+            return res.status(200).send({ 
+                status: 'Success', 
+                message: 'Contact logged and thank-you email triggered.',
+                contactId: contactId
+            });
+
+        } catch (error) {
+            console.error("Error creating contact:", error);
+            return res.status(500).send("Server error during contact creation.");
+        }
+    });
 });
 
 
 // -------------------------------------------------------------------------
-// FUNCTION 2: updateContactNotes (V2 HTTP POST) - Saves details and sets follow-up time
+// FUNCTION 2: updateContactNotes (V2 HTTP POST)
 // -------------------------------------------------------------------------
-exports.updateContactNotes = onRequest({ region: "us-central1" }, async (req, res) => {
-    if (req.method !== 'POST' || !req.body.contactId || !req.body.notes) {
-        return res.status(400).send('Invalid request or missing Contact ID or Notes.');
-    }
+exports.updateContactNotes = onRequest({ region: "us-central1" }, (req, res) => {
+    // <-- CORS FIX 3: Wrap the function in the cors handler
+    cors(req, res, async () => {
+        if (req.method !== 'POST' || !req.body.contactId || !req.body.notes) {
+            return res.status(400).send('Invalid request or missing Contact ID or Notes.');
+        }
 
-    const { contactId, targetName, targetCompany, notes } = req.body;
-    
-    const followupIntervalHours = 720; // 30 days default
-    const reminderTime = new Date(Date.now() + (followupIntervalHours * 60 * 60 * 1000));
-    
-    try {
-        const contactRef = db.collection('contacts').doc(contactId);
+        const { contactId, targetName, targetCompany, notes } = req.body;
 
-        await contactRef.update({
-            target_name: targetName,
-            target_company: targetCompany,
-            notes: notes,
-            followup_interval_hours: followupIntervalHours,
-            follow_up_time: admin.firestore.Timestamp.fromDate(reminderTime),
-            
-            notes_prompted: true, 
-            reminder_status: 'PENDING',
-        });
+        const followupIntervalHours = 720; // 30 days default
+        const reminderTime = new Date(Date.now() + (followupIntervalHours * 60 * 60 * 1000));
 
-        return res.status(200).send({ 
-            status: 'Success', 
-            message: 'Details saved, final follow-up reminder scheduled.',
-            reminderTime: reminderTime.toISOString()
-        });
+        try {
+            const contactRef = db.collection('contacts').doc(contactId);
 
-    } catch (error) {
-        console.error(`Error updating contact ${contactId}:`, error);
-        return res.status(500).send("Server error saving contact details.");
-    }
+            await contactRef.update({
+                target_name: targetName,
+                target_company: targetCompany,
+                notes: notes,
+                followup_interval_hours: followupIntervalHours,
+                follow_up_time: admin.firestore.Timestamp.fromDate(reminderTime),
+
+                notes_prompted: true, 
+                reminder_status: 'PENDING',
+            });
+
+            return res.status(200).send({ 
+                status: 'Success', 
+                message: 'Details saved, final follow-up reminder scheduled.',
+                reminderTime: reminderTime.toISOString()
+            });
+
+        } catch (error) {
+            console.error(`Error updating contact ${contactId}:`, error);
+            return res.status(500).send("Server error saving contact details.");
+        }
+    });
 });
 
 
 // -------------------------------------------------------------------------
-// FUNCTION 3: processFollowUp (V2 Scheduled) - Handles automated reminders
+// FUNCTION 3: processFollowUp (V2 Scheduled)
 // -------------------------------------------------------------------------
-// Uses onSchedule imported at the top.
 exports.processFollowUp = onSchedule("0,6,12,18 * * * *", async (context) => {
     const currentTime = admin.firestore.Timestamp.now();
     const updatePromises = [];
 
-    // --- LOGIC 1: REMIND APP OWNER TO ADD NOTES (12 hours after meeting) ---
     const twelveHoursAgo = new Date(currentTime.toDate().getTime() - (12 * 60 * 60 * 1000));
-    
+
     const pendingNotesSnapshot = await db.collection('contacts')
         .where('notes_prompted', '==', false) 
         .where('date_met', '<=', admin.firestore.Timestamp.fromDate(twelveHoursAgo))
@@ -166,20 +166,19 @@ exports.processFollowUp = onSchedule("0,6,12,18 * * * *", async (context) => {
         updatePromises.push(doc.ref.update({ notes_prompted: true })); 
     });
 
-    // --- LOGIC 2: SUBSCRIPTION FOLLOW-UP REMINDER (30 Days After Notes Saved) ---
     const finalReminderSnapshot = await db.collection('contacts')
         .where('reminder_status', '==', 'PENDING')
         .where('follow_up_time', '<=', currentTime)
         .limit(50) 
         .get();
-        
+
     finalReminderSnapshot.forEach(doc => {
         const log = doc.data();
         console.log(`[SUBSCRIPTION] Alerting owner ${log.owner_id} to follow up with ${log.target_name}. Notes: ${log.notes}.`);
 
         const ninetyDays = 90 * 24 * 60 * 60 * 1000;
         const newFollowUpTime = new Date(Date.now() + ninetyDays);
-        
+
         updatePromises.push(doc.ref.update({ 
             reminder_status: 'SENT',
             follow_up_time: admin.firestore.Timestamp.fromDate(newFollowUpTime) 
