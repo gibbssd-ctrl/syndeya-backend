@@ -3,7 +3,7 @@ const admin = require('firebase-admin');
 const nodemailer = require('nodemailer'); 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest } = require("firebase-functions/v2/https");
-const cors = require('cors')({origin: true}); // <-- CORS FIX 1: Import and configure cors
+const cors = require('cors')({origin: true}); 
 
 admin.initializeApp({
     projectId: 'syndeya-81bf4', 
@@ -58,14 +58,13 @@ async function sendThankYou(recipientEmail, contactName, eventName, ownerName) {
 // FUNCTION 1: createContact (V2 HTTP POST)
 // -------------------------------------------------------------------------
 exports.createContact = onRequest({ region: "us-central1" }, (req, res) => {
-    // <-- CORS FIX 2: Wrap the function in the cors handler
     cors(req, res, async () => {
         if (req.method !== 'POST' || !req.body.recipientEmail || !req.body.cardHolderId || !req.body.ownerName) {
             return res.status(400).send('Invalid request or missing required fields (email, ownerId, ownerName).');
         }
 
         const { recipientEmail, cardHolderId, ownerName, meetingLocation, targetName } = req.body;
-
+        
         const timestampCreated = admin.firestore.Timestamp.now();
         const contactId = db.collection('contacts').doc().id; 
         const eventName = meetingLocation || 'a recent event';
@@ -106,17 +105,16 @@ exports.createContact = onRequest({ region: "us-central1" }, (req, res) => {
 // FUNCTION 2: updateContactNotes (V2 HTTP POST)
 // -------------------------------------------------------------------------
 exports.updateContactNotes = onRequest({ region: "us-central1" }, (req, res) => {
-    // <-- CORS FIX 3: Wrap the function in the cors handler
     cors(req, res, async () => {
         if (req.method !== 'POST' || !req.body.contactId || !req.body.notes) {
             return res.status(400).send('Invalid request or missing Contact ID or Notes.');
         }
 
         const { contactId, targetName, targetCompany, notes } = req.body;
-
+        
         const followupIntervalHours = 720; // 30 days default
         const reminderTime = new Date(Date.now() + (followupIntervalHours * 60 * 60 * 1000));
-
+        
         try {
             const contactRef = db.collection('contacts').doc(contactId);
 
@@ -126,7 +124,7 @@ exports.updateContactNotes = onRequest({ region: "us-central1" }, (req, res) => 
                 notes: notes,
                 followup_interval_hours: followupIntervalHours,
                 follow_up_time: admin.firestore.Timestamp.fromDate(reminderTime),
-
+                
                 notes_prompted: true, 
                 reminder_status: 'PENDING',
             });
@@ -152,38 +150,92 @@ exports.processFollowUp = onSchedule("0,6,12,18 * * * *", async (context) => {
     const currentTime = admin.firestore.Timestamp.now();
     const updatePromises = [];
 
+    // --- LOGIC 1: REMIND APP OWNER TO ADD NOTES (12 hours after meeting) ---
     const twelveHoursAgo = new Date(currentTime.toDate().getTime() - (12 * 60 * 60 * 1000));
-
+    
     const pendingNotesSnapshot = await db.collection('contacts')
         .where('notes_prompted', '==', false) 
         .where('date_met', '<=', admin.firestore.Timestamp.fromDate(twelveHoursAgo))
         .limit(50) 
         .get();
 
-    pendingNotesSnapshot.forEach(doc => {
+    for (const doc of pendingNotesSnapshot.docs) {
         const log = doc.data();
-        console.log(`[PROMPT] Sending 'Add Notes' alert to owner ${log.owner_id} for contact ${log.target_name}.`);
-        updatePromises.push(doc.ref.update({ notes_prompted: true })); 
-    });
+        console.log(`[PROMPT] Processing 'Add Notes' for owner ${log.owner_id} for contact ${log.target_name}.`);
+        
+        try {
+            // Get the user's auth record to find their email
+            const userRecord = await admin.auth().getUser(log.owner_id);
+            const ownerEmail = userRecord.email;
+            const ownerName = userRecord.displayName || 'Syndeya User';
 
+            if (ownerEmail) {
+                // Send a real email reminder
+                const mailOptions = {
+                    from: `Syndeya Reminders <${process.env.MAIL_USER}>`,
+                    to: ownerEmail,
+                    subject: `Reminder: Add notes for ${log.target_name}`,
+                    text: `Hi ${ownerName},\n\nThis is a reminder to add your notes for ${log.target_name}, whom you met at ${log.meeting_location}.\n\n- The Syndeya Team`
+                };
+                await mailTransport.sendMail(mailOptions);
+                console.log(`Sent 'Add Notes' email to ${ownerEmail}`);
+            }
+            
+            // Mark as prompted
+            updatePromises.push(doc.ref.update({ notes_prompted: true }));
+
+        } catch (error) {
+            console.error(`Error processing note prompt for user ${log.owner_id}:`, error);
+            // If the user was deleted or something went wrong, still mark as prompted
+            // to avoid an infinite error loop.
+            updatePromises.push(doc.ref.update({ notes_prompted: true, reminder_status: 'ERROR' }));
+        }
+    }
+
+    // --- LOGIC 2: SUBSCRIPTION FOLLOW-UP REMINDER (30 Days After Notes Saved) ---
     const finalReminderSnapshot = await db.collection('contacts')
         .where('reminder_status', '==', 'PENDING')
         .where('follow_up_time', '<=', currentTime)
         .limit(50) 
         .get();
-
-    finalReminderSnapshot.forEach(doc => {
+        
+    for (const doc of finalReminderSnapshot.docs) {
         const log = doc.data();
-        console.log(`[SUBSCRIPTION] Alerting owner ${log.owner_id} to follow up with ${log.target_name}. Notes: ${log.notes}.`);
+        console.log(`[SUBSCRIPTION] Processing follow-up for owner ${log.owner_id} for contact ${log.target_name}.`);
 
-        const ninetyDays = 90 * 24 * 60 * 60 * 1000;
-        const newFollowUpTime = new Date(Date.now() + ninetyDays);
+        try {
+            // Get the user's auth record to find their email
+            const userRecord = await admin.auth().getUser(log.owner_id);
+            const ownerEmail = userRecord.email;
+            const ownerName = userRecord.displayName || 'Syndeya User';
 
-        updatePromises.push(doc.ref.update({ 
-            reminder_status: 'SENT',
-            follow_up_time: admin.firestore.Timestamp.fromDate(newFollowUpTime) 
-        }));
-    });
+            if (ownerEmail) {
+                // Send the 30-day follow-up email
+                const mailOptions = {
+                    from: `Syndeya Reminders <${process.env.MAIL_USER}>`,
+                    to: ownerEmail,
+                    subject: `Time to follow up with ${log.target_name}!`,
+                    text: `Hi ${ownerName},\n\nThis is your scheduled 30-day reminder to follow up with ${log.target_name}.\n\nYour notes: ${log.notes}\n\n- The Syndeya Team`
+                };
+                await mailTransport.sendMail(mailOptions);
+                console.log(`Sent 30-day follow-up to ${ownerEmail}`);
+            }
+            
+            // Schedule the next 90-day reminder
+            const ninetyDays = 90 * 24 * 60 * 60 * 1000;
+            const newFollowUpTime = new Date(Date.now() + ninetyDays);
+            
+            updatePromises.push(doc.ref.update({ 
+                reminder_status: 'SENT',
+                follow_up_time: admin.firestore.Timestamp.fromDate(newFollowUpTime) 
+            }));
+
+        } catch (error) {
+            console.error(`Error processing 30-day follow-up for user ${log.owner_id}:`, error);
+            // If something went wrong, set status to ERROR to avoid spamming
+            updatePromises.push(doc.ref.update({ reminder_status: 'ERROR' }));
+        }
+    }
 
     await Promise.all(updatePromises);
     console.log(`Syndeya Scheduler Run Complete. Processed ${pendingNotesSnapshot.size} note prompts and ${finalReminderSnapshot.size} follow-up reminders.`);
